@@ -1,0 +1,24 @@
+# LangChain Core & Integrations
+langchain
+langchain-core
+langchain-community
+langchain-openai
+langchain-experimental
+langchain-text-splitters
+
+# Knowledge Graph (Neo4j)
+langchain-neo4j
+
+# Vector Database (FAISS CPU)
+faiss-cpu
+
+# PDF & Document Parsing
+pypdf
+
+# Utilities & API
+python-dotenv
+tqdm
+fastapi
+uvicorn
+requests
+python-multipart

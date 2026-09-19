@@ -1,0 +1,63 @@
+services:
+  # ===========================================================================
+  # Backend Service: FastAPI + LangChain + FAISS + Neo4j + Guardrails
+  # ===========================================================================
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hybrid_rag_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      # Persist FAISS vector database indices across container restarts
+      - ./faiss_index:/app/faiss_index
+      # Mount sample documents directory
+      - ./docs:/app/docs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rag-network
+
+  # ===========================================================================
+  # Frontend Service: Streamlit Studio Chat & Ingestion UI
+  # ===========================================================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hybrid_rag_frontend
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      # Internal docker network URL to communicate with FastAPI backend
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - rag-network
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  rag-network:
+    driver: bridge

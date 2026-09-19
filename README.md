@@ -94,7 +94,30 @@ hybrid_rag/
 
 ---
 
-## Quickstart: Running Backend & Frontend
+## Quickstart with Docker (Recommended)
+
+Run both the FastAPI backend and Streamlit frontend as isolated container services with a single command:
+
+```bash
+# 1. Ensure your .env file is configured with OPENAI_API_KEY and NEO4J credentials
+cp .env.example .env
+
+# 2. Build and launch both services
+docker compose up --build
+```
+
+- **Streamlit Frontend**: [http://localhost:8501](http://localhost:8501)
+- **FastAPI Documentation (Swagger UI)**: [http://localhost:8000/docs](http://localhost:8000/docs)
+- **FastAPI Healthcheck**: [http://localhost:8000/health](http://localhost:8000/health)
+
+To stop the services:
+```bash
+docker compose down
+```
+
+---
+
+## Quickstart: Running Locally without Docker
 
 ### 1. Start the FastAPI Backend Server
 The FastAPI backend coordinates all pipeline tasks (document ingestion, FAISS indexing, Neo4j graph extraction, hybrid retrieval, and safety guardrails):

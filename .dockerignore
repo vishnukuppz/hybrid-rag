@@ -1,0 +1,30 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+.deepeval/
+
+# Version control
+.git/
+.gitignore
+
+# Secrets & environment
+.env
+.env.local
+
+# macOS / OS files
+.DS_Store
+Thumbs.db
+
+# Testing and scratch
+tests/
