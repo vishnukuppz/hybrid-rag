@@ -1,0 +1,23 @@
+# Full / Extended Dependencies (Includes local PyTorch, HuggingFace models, Guardrails & Eval)
+# Use this only if you need local GPU/MPS HuggingFace models or offline evaluation.
+
+-r requirements.txt
+
+# Hugging Face & Local Model Execution (Heavy: ~1.5 - 2.5 GB)
+transformers
+torch
+torchvision
+accelerate
+sentence-transformers
+langchain-huggingface
+pillow
+
+# Automation
+playwright
+
+# Safety & Guardrails (Heavy dependency tree)
+nemoguardrails
+
+# Evaluation & Testing
+deepeval
+pytest
