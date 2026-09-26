@@ -1,6 +1,6 @@
 # =============================================================================
-# Frontend Dockerfile - Streamlit UI
-# Build context: ./frontend  |  Port: 8000
+# Database Service Dockerfile - FAISS Vector Database
+# Build context: ./database  |  Port: 8002
 # =============================================================================
 FROM python:3.11-slim
 
@@ -9,23 +9,24 @@ WORKDIR /app
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
-    STREAMLIT_SERVER_HEADLESS=true \
-    STREAMLIT_SERVER_PORT=8000 \
-    STREAMLIT_SERVER_ADDRESS=0.0.0.0
+    FAISS_INDEX_DIR=/app/faiss_index
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --retries 5 --timeout 120 -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-EXPOSE 8000
+RUN mkdir -p /app/faiss_index
+
+EXPOSE 8002
 
 HEALTHCHECK --interval=20s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/_stcore/health || exit 1
+    CMD curl -f http://localhost:8002/health || exit 1
 
-CMD ["streamlit", "run", "app.py", "--server.port=8000", "--server.address=0.0.0.0"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8002"]

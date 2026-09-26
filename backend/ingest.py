@@ -5,15 +5,16 @@ from pathlib import Path
 from typing import Dict, Any
 from dotenv import load_dotenv
 
-# Ensure project root is in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Add backend/ to sys.path so non-prefixed imports resolve locally and in Docker
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
 
-from backend.common.pipeline import CommonIngestionPipeline
-from backend.vector_pipeline.pipeline import VectorStoragePipeline
-from backend.graph_pipeline.pipeline import GraphStoragePipeline
+from common.pipeline import CommonIngestionPipeline
+from vector_pipeline.pipeline import VectorStoragePipeline
+from graph_pipeline.pipeline import GraphStoragePipeline
 
+PROJECT_ROOT = _BACKEND_DIR.parent
 load_dotenv(PROJECT_ROOT / ".env")
 
 

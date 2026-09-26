@@ -1,3 +1,3 @@
-from backend.guardrails.manager import HybridRAGGuardrailManager
+from guardrails.manager import HybridRAGGuardrailManager
 
 __all__ = ["HybridRAGGuardrailManager"]

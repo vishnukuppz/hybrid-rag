@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union
 from langchain_core.documents import Document
 
-from backend.common.document_loader import DocumentLoader
-from backend.common.text_splitter import CommonTextSplitter
+from common.document_loader import DocumentLoader
+from common.text_splitter import CommonTextSplitter
 
 logger = logging.getLogger(__name__)
 

@@ -1,27 +1,26 @@
 services:
+
   # ===========================================================================
-  # Backend Service: FastAPI + LangChain + FAISS + Neo4j + Guardrails
+  # Service 1: DATABASE — FAISS Vector Database
+  #   Port: 8002
   # ===========================================================================
-  backend:
+  database:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
-    container_name: hybrid_rag_backend
+      context: ./database
+      dockerfile: Dockerfile
+    container_name: hybrid_rag_database
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8002:8002"
     env_file:
       - .env
     environment:
       - HOST=0.0.0.0
-      - PORT=8000
+      - PORT=8002
     volumes:
-      # Persist FAISS vector database indices across container restarts
-      - ./faiss_index:/app/faiss_index
-      # Mount sample documents directory
-      - ./docs:/app/docs
+      - faiss_data:/app/faiss_index
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -30,30 +29,70 @@ services:
       - rag-network
 
   # ===========================================================================
-  # Frontend Service: Streamlit Studio Chat & Ingestion UI
+  # Service 2: BACKEND — FastAPI RAG APIs
+  #   Port: 8001
+  # ===========================================================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: hybrid_rag_backend
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8001
+      - DATABASE_URL=http://database:8002
+    volumes:
+      - ./docs:/app/docs
+    depends_on:
+      database:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - rag-network
+
+  # ===========================================================================
+  # Service 3: FRONTEND — Streamlit UI
+  #   Port: 8000
   # ===========================================================================
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: hybrid_rag_frontend
     restart: unless-stopped
     ports:
-      - "8501:8501"
+      - "8000:8000"
     environment:
-      # Internal docker network URL to communicate with FastAPI backend
-      - BACKEND_URL=http://backend:8000
+      - BACKEND_URL=http://backend:8001
+      - STREAMLIT_SERVER_PORT=8000
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/_stcore/health"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
     networks:
       - rag-network
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  faiss_data:
+    driver: local
 
 # =============================================================================
 # Networks

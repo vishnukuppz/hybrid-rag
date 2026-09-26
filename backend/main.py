@@ -3,46 +3,46 @@ import sys
 import time
 import shutil
 import tempfile
-import logging
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Path bootstrap: works both locally and inside Docker.
+#   Locally  → adds backend/ to sys.path so `from common.X` resolves.
+#   In Docker → PYTHONPATH=/app already covers /app which IS backend/.
+# ---------------------------------------------------------------------------
+_BACKEND_DIR = Path(__file__).resolve().parent
+if str(_BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_DIR))
+import logging
 from typing import Dict, Any, List, Optional
 
-# Ensure project root and virtual environment site-packages are in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-venv_site_packages = PROJECT_ROOT / ".venv" / "lib"
-if venv_site_packages.exists():
-    for p in venv_site_packages.glob("python*/site-packages"):
-        if str(p) not in sys.path:
-            sys.path.insert(0, str(p))
-
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Query
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+import requests
 import uvicorn
 
-from backend import (
-    CommonIngestionPipeline,
-    VectorStoragePipeline,
-    GraphStoragePipeline,
-    HybridRetrievalPipeline,
-    HybridRAGGuardrailManager,
-)
+from common.pipeline import CommonIngestionPipeline
+from graph_pipeline.pipeline import GraphStoragePipeline
+from retrieval.hybrid_pipeline import HybridRetrievalPipeline
+from guardrails.manager import HybridRAGGuardrailManager
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("hybrid_rag_api")
 
+# Internal service URL for the FAISS database container
+DATABASE_URL = os.getenv("DATABASE_URL", "http://localhost:8002").rstrip("/")
+DEFAULT_DOCS_DIR = Path(__file__).resolve().parent.parent / "docs"
+DOCS_DIR = Path(os.getenv("DOCS_DIR", str(DEFAULT_DOCS_DIR)))
+
 app = FastAPI(
     title="Hybrid RAG API",
-    description="FastAPI backend for Hybrid RAG: Common Ingestion, FAISS Vector DB, Neo4j Knowledge Graph, and Guardrails",
+    description="FastAPI backend — ingestion, Neo4j graph, FAISS (via DB service), and guardrails",
     version="1.0.0",
 )
 
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -51,7 +51,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Pipeline singletons
+# Lazy singletons
 _retrieval_pipeline: Optional[HybridRetrievalPipeline] = None
 _guardrail_manager: Optional[HybridRAGGuardrailManager] = None
 
@@ -60,6 +60,7 @@ def get_retrieval_pipeline() -> HybridRetrievalPipeline:
     global _retrieval_pipeline
     if _retrieval_pipeline is None:
         _retrieval_pipeline = HybridRetrievalPipeline(
+            database_url=DATABASE_URL,
             verbose=True,
         )
     return _retrieval_pipeline
@@ -75,30 +76,24 @@ def get_guardrail_manager() -> HybridRAGGuardrailManager:
     return _guardrail_manager
 
 
-def check_faiss_status() -> Dict[str, Any]:
-    faiss_dir = PROJECT_ROOT / "faiss_index"
-    faiss_file = faiss_dir / "index.faiss"
-    pkl_file = faiss_dir / "index.pkl"
-    available = faiss_file.exists() and pkl_file.exists()
-    size_bytes = 0
-    if available:
-        try:
-            size_bytes = faiss_file.stat().st_size + pkl_file.stat().st_size
-        except Exception:
-            pass
-    return {
-        "available": available,
-        "path": str(faiss_dir),
-        "size_bytes": size_bytes,
-    }
+def get_faiss_status_from_db() -> Dict[str, Any]:
+    """Fetches FAISS index status from the database service."""
+    try:
+        resp = requests.get(f"{DATABASE_URL}/api/db/status", timeout=5)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        logger.warning(f"Cannot reach database service at {DATABASE_URL}: {e}")
+    return {"available": False, "path": "", "size_bytes": 0, "vector_count": 0}
 
 
 # =============================================================================
 # Request & Response Models
 # =============================================================================
+
 class ChatRequest(BaseModel):
     question: str = Field(..., description="User query for the Hybrid RAG system")
-    enable_guardrails: bool = Field(default=True, description="Enable safety moderation and jailbreak checks")
+    enable_guardrails: bool = Field(default=True, description="Enable safety guardrails")
     top_k_vector: int = Field(default=4, description="Number of vector DB passages to retrieve")
 
 
@@ -128,6 +123,7 @@ class IngestionResponse(BaseModel):
 # =============================================================================
 # API Endpoints
 # =============================================================================
+
 @app.get("/")
 def root():
     return {
@@ -145,15 +141,16 @@ def health():
 
 @app.get("/api/status")
 def status():
-    """Returns availability of the FAISS Vector Database and Neo4j Knowledge Graph."""
-    faiss_info = check_faiss_status()
+    """Returns availability of the FAISS DB (via database service) and Neo4j graph."""
+    faiss_info = get_faiss_status_from_db()
     retriever = get_retrieval_pipeline()
     graph_available = retriever.graph_retriever.is_available()
 
     return {
         "faiss_db": faiss_info,
         "neo4j_graph": {"available": graph_available},
-        "ready_for_chat": faiss_info["available"],
+        "ready_for_chat": faiss_info.get("available", False),
+        "database_service_url": DATABASE_URL,
     }
 
 
@@ -163,8 +160,10 @@ async def ingest_document(
     use_sample: bool = Form(False),
 ):
     """
-    Ingests a document through Common Preprocessing -> FAISS Vector DB & Neo4j Knowledge Graph.
-    Accepts either an uploaded file or `use_sample=True` to load spotify_web_app_architecture.pdf.
+    Ingests a document through:
+      1. Common Preprocessing (load + split into chunks)
+      2. FAISS Vector DB  → sends chunks to the database service
+      3. Neo4j Knowledge Graph  → entity/relationship extraction
     """
     global _retrieval_pipeline
     t_start = time.time()
@@ -172,25 +171,32 @@ async def ingest_document(
     temp_file_path: Optional[Path] = None
 
     try:
+        # Resolve source file
         if use_sample:
-            sample_path = PROJECT_ROOT / "docs" / "spotify_web_app_architecture.pdf"
+            sample_path = DOCS_DIR / "spotify_web_app_architecture.pdf"
             if not sample_path.exists():
-                raise HTTPException(status_code=404, detail="Default sample PDF not found at docs/spotify_web_app_architecture.pdf")
+                raise HTTPException(
+                    status_code=404,
+                    detail="Sample PDF not found at docs/spotify_web_app_architecture.pdf",
+                )
             target_path = sample_path
             filename = sample_path.name
         elif file is not None:
             filename = file.filename or "uploaded_document"
-            temp_dir = Path(tempfile.gettempdir()) / "hybrid_rag_api_uploads"
+            temp_dir = Path(tempfile.gettempdir()) / "hybrid_rag_uploads"
             temp_dir.mkdir(parents=True, exist_ok=True)
             temp_file_path = temp_dir / filename
-            with open(temp_file_path, "wb") as buffer:
-                shutil.copyfileobj(file.file, buffer)
+            with open(temp_file_path, "wb") as buf:
+                shutil.copyfileobj(file.file, buf)
             target_path = temp_file_path
         else:
-            raise HTTPException(status_code=400, detail="Must provide an uploaded file or set use_sample=true")
+            raise HTTPException(
+                status_code=400,
+                detail="Must provide an uploaded file or set use_sample=true",
+            )
 
-        # 1. Common Ingestion
-        logger.info(f"Ingesting: {target_path}")
+        # 1. Common Ingestion (load + split)
+        logger.info(f"Starting ingestion: {target_path}")
         common = CommonIngestionPipeline(chunk_size=600, chunk_overlap=100, mode="auto", verbose=True)
         docs, chunks = common.run(target_path)
 
@@ -198,18 +204,27 @@ async def ingest_document(
             raise HTTPException(status_code=422, detail="No content could be extracted from the document")
 
         logs.append(f"📄 Loaded **{len(docs)}** document sections from `{filename}`")
-        logs.append(f"✂️ Split into **{len(chunks)}** contextual chunks (chunk_size=600, overlap=100)")
+        logs.append(f"✂️ Split into **{len(chunks)}** contextual chunks (size=600, overlap=100)")
 
-        # 2. Vector Pipeline (FAISS)
-        faiss_save_dir = PROJECT_ROOT / "faiss_index"
-        vec_pipe = VectorStoragePipeline(
-            embedding_provider="openai",
-            save_directory=faiss_save_dir,
-            verbose=True,
-        )
-        vec_res = vec_pipe.run_on_chunks(chunks)
-        total_vectors = vec_res.get("total_vectors_in_store", len(chunks))
-        logs.append(f"🧠 Built FAISS Vector DB: **{total_vectors}** vectors indexed at `faiss_index/`")
+        # 2. Send chunks to FAISS Database Service
+        logger.info(f"Sending {len(chunks)} chunks to database service at {DATABASE_URL}")
+        chunks_payload = [
+            {"page_content": chunk.page_content, "metadata": dict(chunk.metadata)}
+            for chunk in chunks
+        ]
+        try:
+            db_resp = requests.post(
+                f"{DATABASE_URL}/api/db/store",
+                json={"chunks": chunks_payload, "append": False},
+                timeout=300,
+            )
+            db_resp.raise_for_status()
+            db_data = db_resp.json()
+            total_vectors = db_data.get("total_vectors", len(chunks))
+            logs.append(f"🧠 Indexed **{total_vectors}** vectors in FAISS database service")
+        except Exception as e:
+            logger.error(f"Database service error: {e}")
+            raise HTTPException(status_code=502, detail=f"FAISS database service failed: {str(e)}")
 
         # 3. Graph Pipeline (Neo4j)
         graph_pipe = GraphStoragePipeline(max_concurrency=5, verbose=True)
@@ -218,11 +233,11 @@ async def ingest_document(
         rels = graph_res.get("neo4j_total_relationships", 0)
         logs.append(f"🕸️ Built Neo4j Knowledge Graph: **{nodes}** nodes, **{rels}** relationships")
 
-        # Invalidate cached retrieval pipeline so new FAISS index is reloaded
+        # Invalidate cached retrieval pipeline
         _retrieval_pipeline = None
 
         t_total = time.time() - t_start
-        logs.append(f"🎉 Ingestion completed in **{t_total:.2f} seconds**.")
+        logs.append(f"🎉 Ingestion completed in **{t_total:.2f} seconds**")
 
         return IngestionResponse(
             status="success",
@@ -236,7 +251,6 @@ async def ingest_document(
             logs=logs,
         )
     finally:
-        # Clean up temporary uploaded file if created
         if temp_file_path and temp_file_path.exists():
             try:
                 temp_file_path.unlink()
@@ -247,14 +261,13 @@ async def ingest_document(
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
     """
-    Executes a Hybrid RAG query across Vector DB & Neo4j Knowledge Graph,
-    with safety guardrails evaluation.
+    Hybrid RAG chat: guardrails → vector retrieval (via DB service) + graph retrieval → LLM synthesis.
     """
     question = request.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty")
 
-    # Guardrails evaluation
+    # Guardrails check
     if request.enable_guardrails:
         guardrails = get_guardrail_manager()
         eval_result = guardrails.evaluate(question)
@@ -264,7 +277,7 @@ async def chat(request: ChatRequest):
             reason = eval_result.get("refusal_reason", "Out of domain")
             refusal_text = eval_result.get(
                 "suggested_response",
-                "I am specialized in technical system architecture and Spotify web app specifications. Please ask questions related to services, APIs, databases, or routes.",
+                "I specialise in technical system architecture. Please ask questions related to services, APIs, databases, or routes.",
             )
             return ChatResponse(
                 question=question,
@@ -277,11 +290,9 @@ async def chat(request: ChatRequest):
                 timing={"total_seconds": 0.05},
             )
 
-    # Retrieval and synthesis
+    # Retrieval + synthesis
     retriever = get_retrieval_pipeline()
-    result = retriever.run(
-        question=question,
-    )
+    result = retriever.run(question=question)
 
     v_res = result.get("vector_result", {})
     g_res = result.get("graph_result", {})
@@ -298,12 +309,8 @@ async def chat(request: ChatRequest):
     )
 
 
-def main():
-    port = int(os.getenv("PORT", "8000"))
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", "8001"))
     host = os.getenv("HOST", "0.0.0.0")
     print(f"🚀 Starting Hybrid RAG FastAPI server on http://{host}:{port}")
-    uvicorn.run("backend.main:app", host=host, port=port, reload=True)
-
-
-if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host=host, port=port, reload=True)

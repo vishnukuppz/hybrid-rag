@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from langchain_neo4j import Neo4jGraph
 
-from backend.graph_pipeline.neo4j_storage import Neo4jStorageManager
+from graph_pipeline.neo4j_storage import Neo4jStorageManager
 
 load_dotenv()
 logger = logging.getLogger(__name__)

@@ -6,9 +6,9 @@ from typing import Dict, Any, List, Optional, Union
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 
-from backend.common.pipeline import CommonIngestionPipeline
-from backend.graph_pipeline.entity_extractor import EntityExtractor
-from backend.graph_pipeline.neo4j_storage import Neo4jStorageManager
+from common.pipeline import CommonIngestionPipeline
+from graph_pipeline.entity_extractor import EntityExtractor
+from graph_pipeline.neo4j_storage import Neo4jStorageManager
 
 load_dotenv()
 

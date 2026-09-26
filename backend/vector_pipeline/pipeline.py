@@ -6,9 +6,9 @@ from typing import Dict, Any, List, Optional, Union
 from dotenv import load_dotenv
 from langchain_core.documents import Document
 
-from backend.common.pipeline import CommonIngestionPipeline
-from backend.vector_pipeline.embeddings import get_embedding_model
-from backend.vector_pipeline.faiss_storage import FAISSVectorStoreManager
+from common.pipeline import CommonIngestionPipeline
+from vector_pipeline.embeddings import get_embedding_model
+from vector_pipeline.faiss_storage import FAISSVectorStoreManager
 
 load_dotenv()
 

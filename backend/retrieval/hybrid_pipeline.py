@@ -1,15 +1,15 @@
-import argparse
 import logging
 import os
 import time
 from typing import Any, Dict, Optional
+
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from backend.retrieval.vector_retriever import VectorRetriever
-from backend.retrieval.graph_retriever import GraphRetriever
+from retrieval.vector_retriever import VectorRetriever
+from retrieval.graph_retriever import GraphRetriever
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -44,23 +44,26 @@ ANSWER INSTRUCTIONS:
 class HybridRetrievalPipeline:
     """
     Master Hybrid RAG Retrieval Pipeline.
-    Simultaneously retrieves from:
-      - FAISS Vector DB (Semantic passages with page/section metadata)
-      - Neo4j Knowledge Graph (Entities, relationships, graph triplets)
-    Fuses both contexts and synthesizes the response using an LLM.
+    Retrieves from:
+      - FAISS Database Service (via HTTP API)
+      - Neo4j Knowledge Graph (entity/relationship triplets)
+    Fuses both contexts and synthesises the answer with an LLM.
     """
 
     def __init__(
         self,
         vector_top_k: int = 4,
         llm_model: Optional[str] = None,
+        database_url: Optional[str] = None,
         verbose: bool = True,
     ):
         self.vector_top_k = vector_top_k
         self.verbose = verbose
         self.llm_model = llm_model or os.getenv("OPENAI_GENERATIVE_MODEL", "gpt-4o-mini")
+        self.database_url = database_url or os.getenv("DATABASE_URL", "http://localhost:8002")
 
         self.vector_retriever = VectorRetriever(
+            database_url=self.database_url,
             top_k=self.vector_top_k,
             verbose=self.verbose,
         )
@@ -68,17 +71,12 @@ class HybridRetrievalPipeline:
             model_name=self.llm_model,
             verbose=self.verbose,
         )
-        self.synthesizer_llm = ChatOpenAI(
-            model_name=self.llm_model,
-            temperature=0.2,
-        )
+        self.synthesizer_llm = ChatOpenAI(model_name=self.llm_model, temperature=0.2)
         self.prompt = PromptTemplate.from_template(HYBRID_RAG_PROMPT)
         self.chain = self.prompt | self.synthesizer_llm | StrOutputParser()
 
     def run(self, question: str) -> Dict[str, Any]:
-        """
-        Execute Hybrid Retrieval & Synthesis.
-        """
+        """Execute Hybrid Retrieval & Synthesis."""
         overall_start = time.time()
 
         if self.verbose:
@@ -88,23 +86,23 @@ class HybridRetrievalPipeline:
             print(f"  User Query: \"{question}\"")
             print("█" * 80)
 
-        # 1. Retrieve from Vector DB (FAISS)
+        # 1. Vector retrieval via database service
         t_vec_start = time.time()
         vector_res = self.vector_retriever.retrieve(question, top_k=self.vector_top_k)
         t_vec = time.time() - t_vec_start
 
-        # 2. Retrieve from Knowledge Graph (Neo4j)
+        # 2. Graph retrieval via Neo4j
         t_graph_start = time.time()
         graph_res = self.graph_retriever.retrieve(question)
         t_graph = time.time() - t_graph_start
 
-        # 3. Context Fusion
-        vector_context = vector_res.get("formatted_context", "").strip() or "No relevant passages found in vector database."
-        graph_context = graph_res.get("formatted_context", "").strip() or "No relevant entities or relationships found in graph."
+        # 3. Context fusion
+        vector_context = vector_res.get("formatted_context", "").strip() or "No relevant passages found."
+        graph_context = graph_res.get("formatted_context", "").strip() or "No relevant entities or relationships found."
 
         if self.verbose:
             print("\n" + "=" * 80)
-            print("🤖 [HYBRID SYNTHESIS] Generating Answer with LLM using Vector + Graph context...")
+            print("🤖 [HYBRID SYNTHESIS] Generating Answer with LLM...")
             print("-" * 80)
 
         t_synth_start = time.time()
@@ -114,7 +112,6 @@ class HybridRetrievalPipeline:
             "graph_context": graph_context,
         })
         t_synth = time.time() - t_synth_start
-
         overall_time = time.time() - overall_start
 
         if self.verbose:
@@ -137,28 +134,3 @@ class HybridRetrievalPipeline:
                 "total_seconds": round(overall_time, 3),
             },
         }
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Hybrid RAG Retrieval CLI (Vector + Graph)")
-    parser.add_argument(
-        "query",
-        nargs="?",
-        default="Which microservice handles playback and sessions, and what are its core tables?",
-        help="Query to ask the Hybrid RAG system",
-    )
-    parser.add_argument(
-        "--top-k",
-        type=int,
-        default=4,
-        help="Top-k chunks for vector retrieval (default: 4)",
-    )
-
-    args = parser.parse_args()
-
-    pipeline = HybridRetrievalPipeline(vector_top_k=args.top_k)
-    pipeline.run(args.query)
-
-
-if __name__ == "__main__":
-    main()

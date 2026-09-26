@@ -1,28 +1,12 @@
 import os
-import sys
 import time
-from pathlib import Path
 from typing import Dict, Any, List, Optional
-
-# Ensure project root and virtual environment site-packages are in sys.path
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-venv_site_packages = PROJECT_ROOT / ".venv" / "lib"
-if venv_site_packages.exists():
-    for p in venv_site_packages.glob("python*/site-packages"):
-        if str(p) not in sys.path:
-            sys.path.insert(0, str(p))
 
 import requests
 import streamlit as st
-from dotenv import load_dotenv
 
-load_dotenv(PROJECT_ROOT / ".env")
-
-# Backend API Configuration
-BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000").rstrip("/")
+# Backend API Configuration — injected by docker-compose via environment variable
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8001").rstrip("/")
 
 # =============================================================================
 # Streamlit Page Configuration
@@ -34,7 +18,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Clean CSS Styling
 st.markdown(
     """
     <style>
@@ -88,19 +71,14 @@ st.markdown(
 # =============================================================================
 if "current_screen" not in st.session_state:
     st.session_state.current_screen = "ingestion"
-
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []
-
 if "ingestion_logs" not in st.session_state:
     st.session_state.ingestion_logs = []
-
 if "active_file_name" not in st.session_state:
     st.session_state.active_file_name = None
-
 if "pending_prompt" not in st.session_state:
     st.session_state.pending_prompt = None
-
 if "use_sample_selected" not in st.session_state:
     st.session_state.use_sample_selected = False
 
@@ -130,7 +108,7 @@ def trigger_ingestion(
             resp = requests.post(
                 f"{BACKEND_URL}/api/ingest",
                 data={"use_sample": "true"},
-                timeout=180,
+                timeout=300,
             )
         else:
             files = {"file": (file_name, file_bytes, "application/octet-stream")}
@@ -138,7 +116,7 @@ def trigger_ingestion(
                 f"{BACKEND_URL}/api/ingest",
                 files=files,
                 data={"use_sample": "false"},
-                timeout=180,
+                timeout=300,
             )
 
         if resp.status_code == 200:
@@ -159,11 +137,7 @@ def send_chat_query(question: str) -> Dict[str, Any]:
     try:
         resp = requests.post(
             f"{BACKEND_URL}/api/chat",
-            json={
-                "question": question,
-                "enable_guardrails": True,
-                "top_k_vector": 4,
-            },
+            json={"question": question, "enable_guardrails": True, "top_k_vector": 4},
             timeout=90,
         )
         if resp.status_code == 200:
@@ -176,22 +150,22 @@ def send_chat_query(question: str) -> Dict[str, Any]:
                 pass
             return {"answer": f"⚠️ Backend error: {err_detail}", "is_refusal": False, "error": True}
     except Exception as e:
-        return {"answer": f"⚠️ Could not reach Backend API at {BACKEND_URL}: {e}", "is_refusal": False, "error": True}
+        return {"answer": f"⚠️ Could not reach Backend at {BACKEND_URL}: {e}", "is_refusal": False, "error": True}
 
 
-# Fetch backend status
+# Fetch live backend status
 api_status = get_backend_status()
 faiss_ready = api_status.get("ready_for_chat", False) or api_status.get("faiss_db", {}).get("available", False)
 backend_online = api_status.get("backend_online", True) if "backend_online" in api_status else True
 
 # =============================================================================
-# Sidebar (Minimal: Screen Navigation only)
+# Sidebar
 # =============================================================================
 with st.sidebar:
     st.title("⚡ Hybrid RAG")
 
     if not backend_online and not faiss_ready:
-        st.error(f"⚠️ FastAPI Backend is offline at `{BACKEND_URL}`.\nRun: `python backend/main.py`")
+        st.error(f"⚠️ FastAPI Backend is offline at `{BACKEND_URL}`.")
 
     screen_choice = st.radio(
         "Navigation",
@@ -213,7 +187,7 @@ with st.sidebar:
 
 
 # =============================================================================
-# SCREEN 1: FILE UPLOAD & INGESTION LOGS
+# SCREEN 1: UPLOAD & INGESTION
 # =============================================================================
 if st.session_state.current_screen == "ingestion":
     st.markdown('<div class="main-title">📤 Upload Document & Ingestion</div>', unsafe_allow_html=True)
@@ -222,7 +196,6 @@ if st.session_state.current_screen == "ingestion":
         unsafe_allow_html=True,
     )
 
-    # 1. Upload section
     col_up, col_sample = st.columns([3, 1])
     with col_up:
         uploaded_file = st.file_uploader(
@@ -244,8 +217,11 @@ if st.session_state.current_screen == "ingestion":
     elif st.session_state.use_sample_selected:
         st.info("📁 Sample File Selected: **spotify_web_app_architecture.pdf**")
 
-    # 2. Action buttons
-    doc_is_uploaded = uploaded_file is not None or st.session_state.use_sample_selected or st.session_state.active_file_name is not None
+    doc_is_uploaded = (
+        uploaded_file is not None
+        or st.session_state.use_sample_selected
+        or st.session_state.active_file_name is not None
+    )
 
     st.write("")
     col_btn_ingest, col_btn_chat = st.columns(2)
@@ -256,12 +232,9 @@ if st.session_state.current_screen == "ingestion":
             type="primary" if not faiss_ready else "secondary",
             disabled=(not doc_is_uploaded),
             use_container_width=True,
-            help="Sends document to FastAPI backend to process through Vector & Graph pipelines.",
+            help="Sends document to FastAPI backend → FAISS DB service + Neo4j graph.",
         )
 
-    # Move to Chat button requirement:
-    # Visible once the doc is uploaded/selected.
-    # Enabled only if FAISS DB is available on disk, otherwise greyed out.
     with col_btn_chat:
         if doc_is_uploaded:
             if faiss_ready:
@@ -273,15 +246,13 @@ if st.session_state.current_screen == "ingestion":
                     "💬 Move to Chat ➡️",
                     disabled=True,
                     use_container_width=True,
-                    help="FAISS database not found. Ingest the document first to enable chat.",
+                    help="Ingest a document first to build the FAISS index.",
                 )
-                st.caption("🔒 *FAISS Vector Database is not built yet. Click 'Ingest Document' first.*")
+                st.caption("🔒 *FAISS Vector Database not ready. Click 'Ingest Document' first.*")
 
-    # 3. Processing & Logging via FastAPI
     if start_ingest:
         status_box = st.status("Ingesting document via FastAPI Backend...", expanded=True)
         t_start = time.time()
-
         status_box.write("📡 Sending document to FastAPI backend at `/api/ingest`...")
 
         if st.session_state.use_sample_selected:
@@ -310,7 +281,6 @@ if st.session_state.current_screen == "ingestion":
             status_box.update(label=f"❌ Error: {err_msg}", state="error")
             st.error(f"Ingestion failed: {err_msg}")
 
-    # 4. Logs of what happened container
     if st.session_state.ingestion_logs:
         st.markdown("---")
         st.markdown("### 📋 Ingestion Activity Logs")
@@ -323,7 +293,6 @@ if st.session_state.current_screen == "ingestion":
 # SCREEN 2: CHAT BOT
 # =============================================================================
 elif st.session_state.current_screen == "chat":
-    # Header bar
     col_back, col_h = st.columns([1.5, 6])
     with col_back:
         if st.button("⬅️ Back to Upload", use_container_width=True):
@@ -332,9 +301,8 @@ elif st.session_state.current_screen == "chat":
     with col_h:
         active_name = st.session_state.active_file_name or "Ingested Document"
         st.markdown('<div class="main-title" style="font-size:1.7rem;">💬 Hybrid RAG Chatbot</div>', unsafe_allow_html=True)
-        st.caption(f"Knowledge Base: **{active_name}** | Dual Retrieval: **FAISS Vector DB + Neo4j Graph (via FastAPI)**")
+        st.caption(f"Knowledge Base: **{active_name}** | Dual Retrieval: **FAISS Vector DB + Neo4j Graph**")
 
-    # Suggested Questions
     st.markdown("##### 💡 Suggested Questions")
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -352,17 +320,14 @@ elif st.session_state.current_screen == "chat":
 
     st.markdown("---")
 
-    # Render chat messages
     for msg in st.session_state.chat_messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-
             if msg.get("details"):
                 det = msg["details"]
                 v_chunks = det.get("vector_chunks", [])
                 g_triplets = det.get("graph_triplets", [])
                 t_sec = det.get("timings", {}).get("total_seconds", 0)
-
                 st.markdown(
                     f"""
                     <span class="badge-vec">🔍 Vector Passages: {len(v_chunks)}</span>
@@ -371,7 +336,6 @@ elif st.session_state.current_screen == "chat":
                     """,
                     unsafe_allow_html=True,
                 )
-
                 if v_chunks or g_triplets:
                     with st.expander("🔍 View Retrieval Evidence (Vector Passages & Graph Facts)"):
                         if v_chunks:
@@ -380,18 +344,17 @@ elif st.session_state.current_screen == "chat":
                                 section = c.get("section", "")
                                 comp = c.get("component", "")
                                 pages = c.get("pages", "")
-                                header_str = f"• **{section}"
+                                h = f"• **{section}"
                                 if comp:
-                                    header_str += f" -> {comp}"
-                                header_str += f"** ({pages}):"
-                                st.markdown(header_str)
+                                    h += f" -> {comp}"
+                                h += f"** ({pages}):"
+                                st.markdown(h)
                                 st.caption(c.get("content", ""))
                         if g_triplets:
                             st.markdown("**Knowledge Graph Evidence:**")
                             for t in g_triplets:
                                 st.markdown(f"• `({t.get('source')}) -[:{t.get('relationship')}]-> ({t.get('target')})`")
 
-    # Chat Input
     user_prompt = st.chat_input("Ask a question about the document...")
     if st.session_state.pending_prompt:
         user_prompt = st.session_state.pending_prompt
@@ -410,11 +373,9 @@ elif st.session_state.current_screen == "chat":
                     refusal = resp_data.get("answer") or "Query intercepted by Guardrail."
                     category = resp_data.get("guardrail_status", "blocked")
                     st.warning(f"🛡️ **Guardrail Intercepted ({category})**\n\n{refusal}")
-                    st.session_state.chat_messages.append({
-                        "role": "assistant",
-                        "content": refusal,
-                        "details": None,
-                    })
+                    st.session_state.chat_messages.append(
+                        {"role": "assistant", "content": refusal, "details": None}
+                    )
                 elif resp_data.get("error"):
                     st.error(resp_data.get("answer"))
                 else:
@@ -443,11 +404,11 @@ elif st.session_state.current_screen == "chat":
                                 section = c.get("section", "")
                                 comp = c.get("component", "")
                                 pages = c.get("pages", "")
-                                header_str = f"• **{section}"
+                                h = f"• **{section}"
                                 if comp:
-                                    header_str += f" -> {comp}"
-                                header_str += f"** ({pages}):"
-                                st.markdown(header_str)
+                                    h += f" -> {comp}"
+                                h += f"** ({pages}):"
+                                st.markdown(h)
                                 st.caption(c.get("content", ""))
                         if g_triplets:
                             st.markdown("**Knowledge Graph Evidence:**")

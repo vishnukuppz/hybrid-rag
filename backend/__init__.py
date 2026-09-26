@@ -1,39 +1,26 @@
 """
 Hybrid RAG Backend Package.
-Exposes common ingestion, vector storage, graph storage, hybrid retrieval, and guardrails.
+All imports use non-prefixed paths since the Docker build context is backend/
+and PYTHONPATH=/app maps directly to the backend/ folder contents.
 """
 
-import sys
-from pathlib import Path
+from common.pipeline import CommonIngestionPipeline
+from common.document_loader import DocumentLoader
+from common.text_splitter import CommonTextSplitter
 
-# Auto-link virtual environment site-packages if running outside venv
-_ROOT = Path(__file__).resolve().parent.parent
-if str(_ROOT) not in sys.path:
-    sys.path.insert(0, str(_ROOT))
+from vector_pipeline.pipeline import VectorStoragePipeline
+from vector_pipeline.embeddings import get_embedding_model
+from vector_pipeline.faiss_storage import FAISSVectorStoreManager
 
-_venv_site = _ROOT / ".venv" / "lib"
-if _venv_site.exists():
-    for _p in _venv_site.glob("python*/site-packages"):
-        if str(_p) not in sys.path:
-            sys.path.insert(0, str(_p))
+from graph_pipeline.pipeline import GraphStoragePipeline
+from graph_pipeline.entity_extractor import EntityExtractor
+from graph_pipeline.neo4j_storage import Neo4jStorageManager
 
-from backend.common.pipeline import CommonIngestionPipeline
-from backend.common.document_loader import DocumentLoader
-from backend.common.text_splitter import CommonTextSplitter
+from retrieval.hybrid_pipeline import HybridRetrievalPipeline
+from retrieval.vector_retriever import VectorRetriever
+from retrieval.graph_retriever import GraphRetriever
 
-from backend.vector_pipeline.pipeline import VectorStoragePipeline
-from backend.vector_pipeline.embeddings import get_embedding_model
-from backend.vector_pipeline.faiss_storage import FAISSVectorStoreManager
-
-from backend.graph_pipeline.pipeline import GraphStoragePipeline
-from backend.graph_pipeline.entity_extractor import EntityExtractor
-from backend.graph_pipeline.neo4j_storage import Neo4jStorageManager
-
-from backend.retrieval.hybrid_pipeline import HybridRetrievalPipeline
-from backend.retrieval.vector_retriever import VectorRetriever
-from backend.retrieval.graph_retriever import GraphRetriever
-
-from backend.guardrails.manager import HybridRAGGuardrailManager
+from guardrails.manager import HybridRAGGuardrailManager
 
 __all__ = [
     "CommonIngestionPipeline",
